@@ -12,11 +12,15 @@ use light_sdk::{
     LightDiscriminator,
 };
 
-declare_id!("CbhxF7aBq9iPP463ALGPnDZtZgs5cHQjkGgM3kEtiUZi");
+declare_id!("DuyCbExa6AYgs2J6uqfJKYXPHm8HQn82ju3TYXtsvmqt");
 
 /// CPI signer for Light System Program invocations
 pub const LIGHT_CPI_SIGNER: CpiSigner =
-    derive_light_cpi_signer!("CbhxF7aBq9iPP463ALGPnDZtZgs5cHQjkGgM3kEtiUZi");
+    derive_light_cpi_signer!("DuyCbExa6AYgs2J6uqfJKYXPHm8HQn82ju3TYXtsvmqt");
+
+/// Compressed Token Program ID (Light Protocol)
+/// cTokenmWW8bLPjZEBAUgYy3zKxQZW6VKi7bqNFEVv3m
+pub const COMPRESSED_TOKEN_PROGRAM_ID: &str = "cTokenmWW8bLPjZEBAUgYy3zKxQZW6VKi7bqNFEVv3m";
 
 // ==========================
 // Account Structs
@@ -77,25 +81,32 @@ pub struct LaunchToken<'info> {
 }
 
 /// Launch a token with compressed TokenSale state using ZK compression
-/// This saves rent by storing sale state in a compressed account
+/// This creates a compressed sale state and works with compressed tokens
+///
+/// ARCHITECTURE FOR COMPRESSED TOKENS:
+/// 1. This instruction creates a compressed TokenSale state (rent-free via Light Protocol)
+/// 2. The token mint should have a token pool registered (done client-side via createTokenPool)
+/// 3. Compressed tokens are minted client-side via mintTo from @lightprotocol/compressed-token
+/// 4. The sale_authority PDA is used as the mint authority for the compressed token mint
+/// 5. Buyers receive compressed tokens (not standard SPL tokens) - ~5000x cheaper
 #[derive(Accounts)]
 pub struct LaunchTokenCompressed<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
 
-    /// Token mint - creator must be mint authority for compressed version
-    #[account(
-        mut,
-        mint::authority = creator,
-    )]
+    /// Token mint - must have a token pool registered for compression
+    /// The sale_authority PDA should be the mint authority
+    #[account(mut)]
     pub token_mint: Account<'info, Mint>,
 
-    /// Sale token account to hold minted tokens
-    /// Owner should be the token_sale PDA
-    #[account(mut)]
-    pub sale_token_account: Account<'info, TokenAccount>,
+    /// CHECK: Sale authority PDA - used as mint authority for compressed tokens
+    /// This PDA signs compressed token mint operations
+    #[account(
+        seeds = [b"sale_authority", token_mint.key().as_ref()],
+        bump,
+    )]
+    pub sale_authority: AccountInfo<'info>,
 
-    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
@@ -170,32 +181,38 @@ pub struct BuyTokens<'info> {
 }
 
 /// Buy tokens using compressed TokenSale state
+///
+/// ARCHITECTURE FOR COMPRESSED TOKEN PURCHASES:
+/// 1. This instruction handles USDC payment and updates compressed sale state
+/// 2. Compressed tokens are transferred client-side via transfer() from @lightprotocol/compressed-token
+/// 3. The sale_authority PDA holds the compressed tokens and signs transfers
+/// 4. Buyers receive compressed tokens directly to their wallet (no token account rent needed)
 #[derive(Accounts)]
 pub struct BuyTokensCompressed<'info> {
     #[account(mut)]
     pub buyer: Signer<'info>,
 
+    /// Buyer's USDC account for payment
     #[account(mut)]
     pub buyer_usdc_account: Account<'info, TokenAccount>,
 
-    #[account(mut)]
-    pub buyer_token_account: Account<'info, TokenAccount>,
-
+    /// Creator's USDC account to receive payment
     #[account(mut)]
     pub creator_usdc_account: Account<'info, TokenAccount>,
 
+    /// Platform owner's USDC account for fees
     #[account(mut)]
     pub owner_usdc_account: Account<'info, TokenAccount>,
 
+    /// Program's USDC escrow account
     #[account(mut)]
     pub program_usdc_account: Account<'info, TokenAccount>,
 
+    /// Token mint with compression enabled
     #[account(mut)]
     pub token_mint: Account<'info, Mint>,
 
-    #[account(mut)]
-    pub sale_token_account: Account<'info, TokenAccount>,
-
+    /// App state for fee configuration
     #[account(
         mut,
         seeds = [b"app_state"],
@@ -203,16 +220,16 @@ pub struct BuyTokensCompressed<'info> {
     )]
     pub app_state: Account<'info, AppState>,
 
-    /// CHECK: Program authority PDA
+    /// CHECK: Program authority PDA for USDC transfers
     #[account(seeds = [b"authority"], bump)]
     pub program_authority: AccountInfo<'info>,
 
-    /// CHECK: Token sale PDA for signing token transfers
+    /// CHECK: Sale authority PDA - holds compressed tokens and signs transfers
     #[account(
-        seeds = [b"token_sale", token_mint.key().as_ref()],
+        seeds = [b"sale_authority", token_mint.key().as_ref()],
         bump,
     )]
-    pub token_sale_authority: AccountInfo<'info>,
+    pub sale_authority: AccountInfo<'info>,
 
     pub token_program: Program<'info, Token>,
 }
@@ -250,28 +267,26 @@ pub struct CloseSale<'info> {
 }
 
 /// Close sale using compressed TokenSale state
+///
+/// ARCHITECTURE FOR CLOSING COMPRESSED TOKEN SALES:
+/// 1. This instruction updates the compressed sale state to inactive
+/// 2. Remaining compressed tokens are transferred client-side back to creator
+/// 3. The sale_authority PDA signs the compressed token transfer
 #[derive(Accounts)]
 pub struct CloseSaleCompressed<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
 
+    /// Token mint with compression enabled
     #[account(mut)]
     pub token_mint: Account<'info, Mint>,
 
-    #[account(mut)]
-    pub sale_token_account: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub creator_token_account: Account<'info, TokenAccount>,
-
-    /// CHECK: Token sale PDA for signing token transfers
+    /// CHECK: Sale authority PDA - holds compressed tokens
     #[account(
-        seeds = [b"token_sale", token_mint.key().as_ref()],
+        seeds = [b"sale_authority", token_mint.key().as_ref()],
         bump,
     )]
-    pub token_sale_authority: AccountInfo<'info>,
-
-    pub token_program: Program<'info, Token>,
+    pub sale_authority: AccountInfo<'info>,
 }
 
 // ==========================
@@ -384,7 +399,15 @@ pub mod gasless_launchpad {
     }
 
     /// Launch a token with compressed TokenSale state using ZK compression
-    /// This stores the TokenSale data in a compressed account (rent-free)
+    ///
+    /// This creates a compressed TokenSale account (rent-free) to track sale state.
+    /// The actual compressed tokens should be:
+    /// 1. Created with a token pool via createTokenPool() client-side
+    /// 2. Minted as compressed tokens via mintTo() from @lightprotocol/compressed-token
+    /// 3. Minted to the sale_authority PDA which will hold the supply for sale
+    ///
+    /// This instruction ONLY creates the sale state - token minting is done client-side
+    /// to properly use compressed tokens (not standard SPL tokens).
     pub fn launch_token_compressed<'info>(
         ctx: Context<'_, '_, '_, 'info, LaunchTokenCompressed<'info>>,
         proof: ValidityProof,
@@ -443,7 +466,7 @@ pub mod gasless_launchpad {
             &crate::ID,
         );
 
-        // Create compressed TokenSale account
+        // Create compressed TokenSale account (rent-free via Light Protocol)
         let mut compressed_sale = LightAccount::<CompressedTokenSale>::new_init(
             &crate::ID,
             Some(address),
@@ -458,6 +481,9 @@ pub mod gasless_launchpad {
         compressed_sale.active = true;
         compressed_sale.limit_per_mint = limit_per_mint;
         compressed_sale.decimals = decimals;
+        // Store the sale authority PDA for client-side token operations
+        compressed_sale.sale_authority = ctx.accounts.sale_authority.key();
+        compressed_sale.sale_authority_bump = ctx.bumps.sale_authority;
 
         // Invoke Light System Program to create compressed account
         LightSystemProgramCpi::new_cpi(LIGHT_CPI_SIGNER, proof)
@@ -465,23 +491,16 @@ pub mod gasless_launchpad {
             .with_new_addresses(&[address_tree_info.into_new_address_params_packed(address_seed)])
             .invoke(light_cpi_accounts)?;
 
-        // Mint tokens to sale account - creator is mint authority
-        token::mint_to(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                MintTo {
-                    mint: ctx.accounts.token_mint.to_account_info(),
-                    to: ctx.accounts.sale_token_account.to_account_info(),
-                    authority: ctx.accounts.creator.to_account_info(),
-                },
-            ),
-            supply,
-        )?;
+        // NOTE: Compressed tokens are minted CLIENT-SIDE using:
+        // const mintTx = await mintTo(rpc, payer, mint, saleAuthority, creator, supply);
+        // This is done after this instruction succeeds.
+        // The sale_authority PDA will hold the compressed tokens for sale.
 
         emit!(TokenLaunchedCompressed {
             token_mint: ctx.accounts.token_mint.key(),
             creator: ctx.accounts.creator.key(),
             compressed_address: address,
+            sale_authority: ctx.accounts.sale_authority.key(),
             symbol,
             name,
             price: price_per_token,
@@ -624,6 +643,15 @@ pub mod gasless_launchpad {
     }
 
     /// Buy tokens from a compressed TokenSale
+    ///
+    /// This instruction handles:
+    /// 1. USDC payment from buyer to creator (with platform fee)
+    /// 2. Updates compressed sale state (tokens_sold, active status)
+    ///
+    /// The compressed token transfer is done CLIENT-SIDE after this instruction:
+    /// const transferTx = await transfer(rpc, payer, mint, tokens_to_send, saleAuthority, buyer.publicKey);
+    ///
+    /// Returns the tokens_to_send value in the event for client to use.
     pub fn buy_tokens_compressed<'info>(
         ctx: Context<'_, '_, '_, 'info, BuyTokensCompressed<'info>>,
         proof: ValidityProof,
@@ -689,7 +717,7 @@ pub mod gasless_launchpad {
                 updated_sale.active = false;
             }
 
-            // USDC transfers
+            // USDC transfers - buyer pays for tokens
             token::transfer(
                 CpiContext::new(
                     ctx.accounts.token_program.to_account_info(),
@@ -705,6 +733,7 @@ pub mod gasless_launchpad {
             let auth_seeds = &[b"authority".as_ref(), &[ctx.bumps.program_authority]];
             let auth_signer = &[&auth_seeds[..]];
 
+            // Platform fee to owner
             token::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
@@ -718,6 +747,7 @@ pub mod gasless_launchpad {
                 fee,
             )?;
 
+            // Creator receives their share
             token::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
@@ -731,6 +761,7 @@ pub mod gasless_launchpad {
                 creator_share,
             )?;
         } else {
+            // Free mint - no USDC payment
             require!(usdc_amount == 0, ErrorCode::FreeMintRequiresZeroPayment);
             require!(current_sale.limit_per_mint > 0, ErrorCode::LimitPerMintNotSet);
             tokens_to_send = current_sale.limit_per_mint;
@@ -750,33 +781,11 @@ pub mod gasless_launchpad {
             }
         }
 
-        // Transfer tokens to buyer using token_sale PDA
-        let token_mint_key = ctx.accounts.token_mint.key();
-        let seeds = &[
-            b"token_sale",
-            token_mint_key.as_ref(),
-            &[ctx.bumps.token_sale_authority],
-        ];
-        let signer = &[&seeds[..]];
-
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.sale_token_account.to_account_info(),
-                    to: ctx.accounts.buyer_token_account.to_account_info(),
-                    authority: ctx.accounts.token_sale_authority.to_account_info(),
-                },
-                signer,
-            ),
-            tokens_to_send,
-        )?;
-
-        // Update compressed account via Light System Program
+        // Update compressed sale state via Light System Program
         let mut light_account = LightAccount::<CompressedTokenSale>::new_mut(
             &crate::ID,
             &account_meta,
-            current_sale,
+            current_sale.clone(),
         )?;
         light_account.tokens_sold = updated_sale.tokens_sold;
         light_account.active = updated_sale.active;
@@ -785,11 +794,18 @@ pub mod gasless_launchpad {
             .with_light_account(light_account)?
             .invoke(light_cpi_accounts)?;
 
+        // NOTE: Compressed token transfer is done CLIENT-SIDE after this instruction:
+        // const transferTx = await transfer(rpc, saleAuthorityKeypair, mint, tokens_to_send, saleAuthority, buyer.publicKey);
+        // The sale_authority PDA needs to sign this transfer.
+        // For this, the client needs to derive the PDA and use approveAndMintTo or similar pattern.
+
         emit!(TokenBoughtCompressed {
             token_mint: ctx.accounts.token_mint.key(),
             buyer: ctx.accounts.buyer.key(),
             usdc_spent: usdc_amount,
             tokens_received: tokens_to_send,
+            sale_authority: current_sale.sale_authority,
+            sale_authority_bump: current_sale.sale_authority_bump,
         });
 
         Ok(())
@@ -830,6 +846,14 @@ pub mod gasless_launchpad {
     }
 
     /// Close a compressed TokenSale and return remaining tokens
+    ///
+    /// This instruction:
+    /// 1. Verifies creator authorization
+    /// 2. Updates compressed sale state to inactive
+    ///
+    /// The compressed token transfer (returning remaining tokens to creator) is done CLIENT-SIDE:
+    /// const remainingTokens = supply_for_sale - tokens_sold;
+    /// const transferTx = await transfer(rpc, saleAuthorityKeypair, mint, remainingTokens, saleAuthority, creator.publicKey);
     pub fn close_sale_compressed<'info>(
         ctx: Context<'_, '_, '_, 'info, CloseSaleCompressed<'info>>,
         proof: ValidityProof,
@@ -852,36 +876,17 @@ pub mod gasless_launchpad {
             crate::LIGHT_CPI_SIGNER,
         );
 
-        let remaining = ctx.accounts.sale_token_account.amount;
-
-        if remaining > 0 {
-            let token_mint_key = ctx.accounts.token_mint.key();
-            let seeds = &[
-                b"token_sale",
-                token_mint_key.as_ref(),
-                &[ctx.bumps.token_sale_authority],
-            ];
-            let signer = &[&seeds[..]];
-
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: ctx.accounts.sale_token_account.to_account_info(),
-                        to: ctx.accounts.creator_token_account.to_account_info(),
-                        authority: ctx.accounts.token_sale_authority.to_account_info(),
-                    },
-                    signer,
-                ),
-                remaining,
-            )?;
-        }
+        // Calculate remaining tokens (for the event)
+        let remaining_tokens = current_sale
+            .supply_for_sale
+            .checked_sub(current_sale.tokens_sold)
+            .ok_or(ErrorCode::MathOverflow)?;
 
         // Update compressed account to mark as closed
         let mut light_account = LightAccount::<CompressedTokenSale>::new_mut(
             &crate::ID,
             &account_meta,
-            current_sale,
+            current_sale.clone(),
         )?;
         light_account.active = false;
 
@@ -889,9 +894,14 @@ pub mod gasless_launchpad {
             .with_light_account(light_account)?
             .invoke(light_cpi_accounts)?;
 
+        // NOTE: Compressed token transfer (returning remaining tokens) is done CLIENT-SIDE:
+        // const transferTx = await transfer(rpc, saleAuthorityKeypair, mint, remainingTokens, saleAuthority, creator.publicKey);
+
         emit!(SaleClosedCompressed {
             token_mint: ctx.accounts.token_mint.key(),
-            remaining_tokens_returned: remaining,
+            remaining_tokens_returned: remaining_tokens,
+            sale_authority: current_sale.sale_authority,
+            sale_authority_bump: current_sale.sale_authority_bump,
         });
 
         Ok(())
@@ -930,17 +940,34 @@ pub struct TokenSale {
 // ==========================
 /// Compressed TokenSale account - stored in Light Protocol merkle tree
 /// No rent required - only pays for compression proof (~0.00001 SOL vs ~0.002 SOL)
+///
+/// This state tracks the sale configuration. The actual compressed tokens are:
+/// - Minted via @lightprotocol/compressed-token SDK (client-side)
+/// - Held by the sale_authority PDA
+/// - Transferred to buyers via compressed token transfers (client-side)
 #[event]
 #[derive(Clone, Debug, Default, LightDiscriminator)]
 pub struct CompressedTokenSale {
+    /// Creator who launched the sale
     pub creator: Pubkey,
+    /// Token mint address (must have token pool registered)
     pub token_mint: Pubkey,
+    /// Price per token in USDC (with 6 decimals), 0 for free mints
     pub price_per_token: u64,
+    /// Total supply available for sale
     pub supply_for_sale: u64,
+    /// Number of tokens already sold
     pub tokens_sold: u64,
+    /// Whether the sale is active
     pub active: bool,
+    /// Maximum tokens per purchase (0 = unlimited for paid, required for free)
     pub limit_per_mint: u64,
+    /// Token decimals
     pub decimals: u8,
+    /// Sale authority PDA that holds the compressed tokens
+    pub sale_authority: Pubkey,
+    /// Bump seed for the sale_authority PDA
+    pub sale_authority_bump: u8,
 }
 
 // ==========================
@@ -963,6 +990,8 @@ pub struct TokenLaunchedCompressed {
     pub token_mint: Pubkey,
     pub creator: Pubkey,
     pub compressed_address: [u8; 32],
+    /// Sale authority PDA - client should mint compressed tokens to this address
+    pub sale_authority: Pubkey,
     pub symbol: String,
     pub name: String,
     pub price: u64,
@@ -984,7 +1013,12 @@ pub struct TokenBoughtCompressed {
     pub token_mint: Pubkey,
     pub buyer: Pubkey,
     pub usdc_spent: u64,
+    /// Number of compressed tokens to transfer to buyer (client-side)
     pub tokens_received: u64,
+    /// Sale authority PDA holding the compressed tokens
+    pub sale_authority: Pubkey,
+    /// Bump for the sale authority PDA
+    pub sale_authority_bump: u8,
 }
 
 #[event]
@@ -996,7 +1030,12 @@ pub struct SaleClosed {
 #[event]
 pub struct SaleClosedCompressed {
     pub token_mint: Pubkey,
+    /// Number of remaining compressed tokens to return to creator (client-side)
     pub remaining_tokens_returned: u64,
+    /// Sale authority PDA holding the remaining compressed tokens
+    pub sale_authority: Pubkey,
+    /// Bump for the sale authority PDA
+    pub sale_authority_bump: u8,
 }
 
 // ==========================

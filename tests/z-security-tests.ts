@@ -118,24 +118,27 @@ describe("Security Tests", () => {
       )
     );
 
-    // await Promise.all([
-    //   provider.connection.requestAirdrop(
-    //     creator.publicKey,
-    //     10 * anchor.web3.LAMPORTS_PER_SOL
-    //   ),
-    //   provider.connection.requestAirdrop(
-    //     buyer.publicKey,
-    //     10 * anchor.web3.LAMPORTS_PER_SOL
-    //   ),
-    //   provider.connection.requestAirdrop(
-    //     attacker.publicKey,
-    //     10 * anchor.web3.LAMPORTS_PER_SOL
-    //   ),
-    //   provider.connection.requestAirdrop(
-    //     platformOwner.publicKey,
-    //     10 * anchor.web3.LAMPORTS_PER_SOL
-    //   ),
-    // ]);
+    // // Airdrop SOL to test accounts on localnet
+    // console.log("Airdropping SOL to test accounts...");
+    // const airdropAmount = 10 * anchor.web3.LAMPORTS_PER_SOL;
+
+    // try {
+    //   const airdrop1 = await provider.connection.requestAirdrop(creator.publicKey, airdropAmount);
+    //   await provider.connection.confirmTransaction(airdrop1, "confirmed");
+
+    //   const airdrop2 = await provider.connection.requestAirdrop(buyer.publicKey, airdropAmount);
+    //   await provider.connection.confirmTransaction(airdrop2, "confirmed");
+
+    //   const airdrop3 = await provider.connection.requestAirdrop(attacker.publicKey, airdropAmount);
+    //   await provider.connection.confirmTransaction(airdrop3, "confirmed");
+
+    //   const airdrop4 = await provider.connection.requestAirdrop(platformOwner.publicKey, airdropAmount);
+    //   await provider.connection.confirmTransaction(airdrop4, "confirmed");
+
+    //   console.log("Airdrops completed!");
+    // } catch (err) {
+    //   console.log("Note: Airdrop failed (may already have SOL or on mainnet):", err.message);
+    // }
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
 

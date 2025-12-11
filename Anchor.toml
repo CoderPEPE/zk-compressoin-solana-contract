@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-solana_launchpad = "CbhxF7aBq9iPP463ALGPnDZtZgs5cHQjkGgM3kEtiUZi"
+solana_launchpad = "DuyCbExa6AYgs2J6uqfJKYXPHm8HQn82ju3TYXtsvmqt"
 
 [programs.devnet]
-solana_launchpad = "CbhxF7aBq9iPP463ALGPnDZtZgs5cHQjkGgM3kEtiUZi"
+solana_launchpad = "DuyCbExa6AYgs2J6uqfJKYXPHm8HQn82ju3TYXtsvmqt"
 
 [registry]
 url = "https://api.apr.dev"
