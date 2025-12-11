@@ -6,13 +6,16 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-solana_launchpad = "54cgw9LKXBQDJ8LapbZxtTRvDdYPFQUAq9BDTrnWd3aW"
+solana_launchpad = "CbhxF7aBq9iPP463ALGPnDZtZgs5cHQjkGgM3kEtiUZi"
+
+[programs.devnet]
+solana_launchpad = "CbhxF7aBq9iPP463ALGPnDZtZgs5cHQjkGgM3kEtiUZi"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "https://devnet.helius-rpc.com/?api-key=e26bf879-6bb4-49c0-aafa-8e4d86687455"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

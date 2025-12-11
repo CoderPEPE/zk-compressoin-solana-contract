@@ -21,8 +21,19 @@ custom-panic = []
 
 
 [dependencies]
-anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
-anchor-spl = "0.32.1"
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
+anchor-spl = "0.31.1"
+light-sdk = { version = "0.17.1", features = ["anchor"] }
+light-hasher = { version = "5.0.0", features = ["solana"] }
+light-sdk-types = { version = "0.17.1", features = ["anchor"] }
+
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+solana-sdk = "2.2"
+
+[dev-dependencies]
+light-client = "0.17.2"
+light-program-test = "0.17.1"
+tokio = "1.36.0"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

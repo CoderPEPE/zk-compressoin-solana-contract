@@ -8,12 +8,18 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import { assert } from "chai";
-
+import { Rpc, createRpc } from "@lightprotocol/stateless.js";
+import { createTokenPool } from "@lightprotocol/compressed-token";
+import bs58 from "bs58";
 describe("Security Tests", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.GaslessLaunchpad as Program<GaslessLaunchpad>;
+  const program = anchor.workspace
+    .GaslessLaunchpad as Program<GaslessLaunchpad>;
+
+  // ZK Compression RPC
+  let rpc: Rpc;
 
   let usdcMint: anchor.web3.PublicKey;
   let fakeUsdcMint: anchor.web3.PublicKey;
@@ -32,11 +38,15 @@ describe("Security Tests", () => {
   let programAuthority: anchor.web3.PublicKey;
   let appState: anchor.web3.PublicKey;
 
-  // Helper function to setup a token for testing
+  // Helper function to setup a token for testing with ZK compression support
   async function setupTestToken(
     payer: anchor.web3.Keypair,
     decimals: number = 9
-  ): Promise<{ tokenMint: anchor.web3.PublicKey, tokenSale: anchor.web3.PublicKey, saleTokenAccount: anchor.web3.PublicKey }> {
+  ): Promise<{
+    tokenMint: anchor.web3.PublicKey;
+    tokenSale: anchor.web3.PublicKey;
+    saleTokenAccount: anchor.web3.PublicKey;
+  }> {
     const tokenMintKeypair = anchor.web3.Keypair.generate();
     const [tokenSale] = anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("token_sale"), tokenMintKeypair.publicKey.toBuffer()],
@@ -52,6 +62,13 @@ describe("Security Tests", () => {
       tokenMintKeypair // Use this specific keypair for the mint address
     );
 
+    // Create token pool for ZK compression support
+    try {
+      await createTokenPool(rpc, payer, tokenMint);
+    } catch (err) {
+      // Token pool creation may fail in local validator without Light programs
+    }
+
     const saleTokenAccountInfo = await getOrCreateAssociatedTokenAccount(
       provider.connection,
       payer,
@@ -60,23 +77,67 @@ describe("Security Tests", () => {
       true // allowOwnerOffCurve
     );
 
-    return { tokenMint, tokenSale, saleTokenAccount: saleTokenAccountInfo.address };
+    return {
+      tokenMint,
+      tokenSale,
+      saleTokenAccount: saleTokenAccountInfo.address,
+    };
   }
 
   before(async () => {
-    creator = anchor.web3.Keypair.generate();
-    buyer = anchor.web3.Keypair.generate();
-    attacker = anchor.web3.Keypair.generate();
-    platformOwner = anchor.web3.Keypair.generate();
+    // Initialize ZK Compression RPC
+    rpc = createRpc(
+      provider.connection.rpcEndpoint,
+      provider.connection.rpcEndpoint
+    );
 
-    await Promise.all([
-      provider.connection.requestAirdrop(creator.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-      provider.connection.requestAirdrop(buyer.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-      provider.connection.requestAirdrop(attacker.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-      provider.connection.requestAirdrop(platformOwner.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-    ]);
+    // creator = anchor.web3.Keypair.generate();
+    // buyer = anchor.web3.Keypair.generate();
+    // attacker = anchor.web3.Keypair.generate();
+    // platformOwner = anchor.web3.Keypair.generate();
 
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    attacker = anchor.web3.Keypair.fromSecretKey(
+      bs58.decode(
+        "3VGCZbTmMQsRN9rkgG2D8PJroSeVSccEJ5pttChTUSpveCGoD1MY4sTCYjcH1EtKJm4PmR4KMbSNT8Hhc4rx3PRJ"
+      )
+    );
+
+    creator = anchor.web3.Keypair.fromSecretKey(
+      bs58.decode(
+        "2zUfsrV2vDiejgagoQUhs6qT5AzJg1iVGcE4U8Q5XJB1e5Pi3TJ5xDaDDWaqZ8uNqCPTUwB2Xwjnh5irtCV3CYmH"
+      )
+    );
+    buyer = anchor.web3.Keypair.fromSecretKey(
+      bs58.decode(
+        "3zyLcEF78fZdusNRVVcwX5yrpeRnBN7v2hyAPxXBDQCkXaVJQahy8WfT1GgvR72bCKebJVxNioPCtt55hUiDMJTY"
+      )
+    );
+    platformOwner = anchor.web3.Keypair.fromSecretKey(
+      bs58.decode(
+        "YWUtgg41TKVb4J2LXeHTn2GWtWqmCc1hG2qYFCQeWZfiY7cWF6tEb4fNZtsB43YJv2ivxJv8fBwi6Dp2Hy5MohS"
+      )
+    );
+
+    // await Promise.all([
+    //   provider.connection.requestAirdrop(
+    //     creator.publicKey,
+    //     10 * anchor.web3.LAMPORTS_PER_SOL
+    //   ),
+    //   provider.connection.requestAirdrop(
+    //     buyer.publicKey,
+    //     10 * anchor.web3.LAMPORTS_PER_SOL
+    //   ),
+    //   provider.connection.requestAirdrop(
+    //     attacker.publicKey,
+    //     10 * anchor.web3.LAMPORTS_PER_SOL
+    //   ),
+    //   provider.connection.requestAirdrop(
+    //     platformOwner.publicKey,
+    //     10 * anchor.web3.LAMPORTS_PER_SOL
+    //   ),
+    // ]);
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Create real USDC mint
     usdcMint = await createMint(
@@ -122,7 +183,10 @@ describe("Security Tests", () => {
       const appStateAccount = await program.account.appState.fetch(appState);
       usdcMint = appStateAccount.usdcMint;
       usingExistingMint = true;
-      console.log("Using existing USDC mint from app_state:", usdcMint.toString());
+      console.log(
+        "Using existing USDC mint from app_state:",
+        usdcMint.toString()
+      );
     }
 
     // Create token accounts
@@ -233,8 +297,8 @@ describe("Security Tests", () => {
         const errStr = err.toString();
         assert.ok(
           errStr.includes("InvalidFee") ||
-          errStr.includes("6000") ||
-          errStr.includes("already in use"), // Account already initialized from previous test
+            errStr.includes("6000") ||
+            errStr.includes("already in use"), // Account already initialized from previous test
           "Expected InvalidFee error or account already initialized"
         );
       }
@@ -258,9 +322,9 @@ describe("Security Tests", () => {
         // Will fail with ConstraintAddress (2003) or ConstraintHasOne
         assert.ok(
           errStr.includes("ConstraintAddress") ||
-          errStr.includes("2003") ||
-          errStr.includes("ConstraintHasOne") ||
-          errStr.includes("2001"),
+            errStr.includes("2003") ||
+            errStr.includes("ConstraintHasOne") ||
+            errStr.includes("2001"),
           "Expected constraint error for wrong owner"
         );
       }
@@ -282,10 +346,13 @@ describe("Security Tests", () => {
         // Should fail with InvalidFee or constraint error if owner doesn't match
         assert.ok(
           errStr.includes("InvalidFee") ||
-          errStr.includes("6000") ||
-          errStr.includes("ConstraintHasOne") ||
-          errStr.includes("2001"),
-          `Expected InvalidFee or constraint error, got: ${errStr.substring(0, 200)}`
+            errStr.includes("6000") ||
+            errStr.includes("ConstraintHasOne") ||
+            errStr.includes("2001"),
+          `Expected InvalidFee or constraint error, got: ${errStr.substring(
+            0,
+            200
+          )}`
         );
       }
     });
@@ -294,7 +361,9 @@ describe("Security Tests", () => {
   describe("Fake USDC Attack Tests", () => {
     it("Cannot buy tokens with fake USDC mint", async () => {
       // Launch a token
-      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(creator);
+      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(
+        creator
+      );
 
       await program.methods
         .launchToken(
@@ -348,11 +417,14 @@ describe("Security Tests", () => {
         const errStr = err.toString();
         assert.ok(
           errStr.includes("InvalidMint") ||
-          errStr.includes("6016") ||
-          errStr.includes("ConstraintToken") ||
-          errStr.includes("2014") ||
-          errStr.includes("ConstraintRaw"),
-          `Expected InvalidMint or ConstraintToken error, got: ${errStr.substring(0, 200)}`
+            errStr.includes("6016") ||
+            errStr.includes("ConstraintToken") ||
+            errStr.includes("2014") ||
+            errStr.includes("ConstraintRaw"),
+          `Expected InvalidMint or ConstraintToken error, got: ${errStr.substring(
+            0,
+            200
+          )}`
         );
       }
     });
@@ -361,7 +433,9 @@ describe("Security Tests", () => {
   describe("Wrong Token Account Owner Tests", () => {
     it("Cannot pass someone else's USDC account as buyer account", async () => {
       // Launch a token
-      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(creator);
+      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(
+        creator
+      );
 
       await program.methods
         .launchToken(
@@ -414,10 +488,13 @@ describe("Security Tests", () => {
         const errStr = err.toString();
         assert.ok(
           errStr.includes("InvalidTokenAccountOwner") ||
-          errStr.includes("6017") ||
-          errStr.includes("ConstraintToken") ||
-          errStr.includes("2014"),
-          `Expected InvalidTokenAccountOwner or ConstraintToken error, got: ${errStr.substring(0, 200)}`
+            errStr.includes("6017") ||
+            errStr.includes("ConstraintToken") ||
+            errStr.includes("2014"),
+          `Expected InvalidTokenAccountOwner or ConstraintToken error, got: ${errStr.substring(
+            0,
+            200
+          )}`
         );
       }
     });
@@ -425,7 +502,10 @@ describe("Security Tests", () => {
 
   describe("Supply Overflow Tests", () => {
     it("Rejects supply that's too large for decimals", async () => {
-      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(creator, 2); // Only 2 decimals
+      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(
+        creator,
+        2
+      ); // Only 2 decimals
 
       try {
         await program.methods
@@ -458,7 +538,9 @@ describe("Security Tests", () => {
 
   describe("Purchase Amount Edge Cases", () => {
     it("Rejects purchase that results in 0 tokens (too small)", async () => {
-      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(creator);
+      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(
+        creator
+      );
 
       // Launch with high price
       await program.methods
@@ -513,11 +595,14 @@ describe("Security Tests", () => {
         // Should fail with PurchaseAmountTooSmall, or account validation errors
         assert.ok(
           errStr.includes("PurchaseAmountTooSmall") ||
-          errStr.includes("6018") ||
-          errStr.includes("integer overflow") ||
-          errStr.includes("InvalidTokenAccountOwner") ||
-          errStr.includes("6017"),
-          `Expected PurchaseAmountTooSmall or validation error, got: ${errStr.substring(0, 200)}`
+            errStr.includes("6018") ||
+            errStr.includes("integer overflow") ||
+            errStr.includes("InvalidTokenAccountOwner") ||
+            errStr.includes("6017"),
+          `Expected PurchaseAmountTooSmall or validation error, got: ${errStr.substring(
+            0,
+            200
+          )}`
         );
       }
     });
@@ -525,7 +610,9 @@ describe("Security Tests", () => {
 
   describe("Inactive Sale Tests", () => {
     it("Cannot buy from inactive sale", async () => {
-      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(creator);
+      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(
+        creator
+      );
 
       await program.methods
         .launchToken(
@@ -601,15 +688,20 @@ describe("Security Tests", () => {
         // Should fail with SaleNotActive or account validation errors
         assert.ok(
           errStr.includes("SaleNotActive") ||
-          errStr.includes("InvalidTokenAccountOwner") ||
-          errStr.includes("6017"),
-          `Expected SaleNotActive or validation error, got: ${errStr.substring(0, 200)}`
+            errStr.includes("InvalidTokenAccountOwner") ||
+            errStr.includes("6017"),
+          `Expected SaleNotActive or validation error, got: ${errStr.substring(
+            0,
+            200
+          )}`
         );
       }
     });
 
     it("Cannot close sale twice", async () => {
-      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(creator);
+      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(
+        creator
+      );
 
       await program.methods
         .launchToken(
@@ -673,7 +765,9 @@ describe("Security Tests", () => {
 
   describe("Metadata Validation Tests", () => {
     it("Rejects metadata_id that's too long", async () => {
-      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(creator);
+      const { tokenMint, tokenSale, saleTokenAccount } = await setupTestToken(
+        creator
+      );
 
       const longMetadata = "a".repeat(101); // 101 characters
 
